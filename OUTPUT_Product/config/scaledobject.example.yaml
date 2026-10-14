@@ -1,0 +1,79 @@
+# KEDA ScaledObject - Event-Driven UiPath Queue Scaling
+#
+# Polls UiPath Orchestrator queue depth and creates
+# ephemeral Jobs to process items. When the queue is empty,
+# scale to zero — no idle pods.
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: uipath-queue-scaler
+  namespace: uipath-runtime
+spec:
+  # Scale Kubernetes Jobs (not Deployments)
+  scaleTargetRef:
+    apiVersion: batch/v1
+    kind: Job
+    name: uipath-robot-job
+  pollingInterval: 10       # Check queue every 10 seconds
+  cooldownPeriod: 60        # Wait 60s after scaling down before scaling again
+  minReplicaCount: 0        # Scale to zero when idle
+  maxReplicaCount: 10       # Max concurrent ephemeral pods
+  triggers:
+  - type: external
+    metadata:
+      # Custom scaler endpoint that queries UiPath Orchestrator queue
+      # You need to deploy the uipath-queue-metrics service alongside
+      scalerAddress: "uipath-queue-metrics.uipath-runtime.svc.cluster.local:8080"
+      queueName: "your-queue-name"
+      # Target: desired concurrency per queue item
+      target: "1"
+  # Job template — each Job is ephemeral
+  jobTargetRef:
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      generateName: uipath-robot-
+      namespace: uipath-runtime
+      labels:
+        app.kubernetes.io/name: uipath-robot
+        app.kubernetes.io/part-of: uipath-private-serverless
+        triggered-by: keda
+    spec:
+      ttlSecondsAfterFinished: 60
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: uipath-robot
+          containers:
+          - name: robot
+            image: uipath/robot:latest
+            imagePullPolicy: Always
+            env:
+            - name: UIPATH_ORCHESTRATOR_URL
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-config
+                  key: orchestrator-url
+            - name: UIPATH_TENANT
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-config
+                  key: orchestrator-tenant
+            - name: UIPATH_MACHINE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-machine-keys
+                  key: default-template
+            - name: UIPATH_QUEUE_NAME
+              value: "your-queue-name"
+            - name: UIPATH_RUN_ONCE
+              value: "true"
+            resources:
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+              requests:
+                cpu: "1"
+                memory: "2Gi"
+          restartPolicy: Never

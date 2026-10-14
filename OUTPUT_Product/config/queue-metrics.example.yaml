@@ -1,0 +1,70 @@
+# Queue Metrics Service for KEDA
+#
+# Tiny HTTP service that queries UiPath Orchestrator API
+# and exposes queue depth as KEDA external scaler metrics.
+# KEDA polls this service to decide how many Jobs to create.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uipath-queue-metrics
+  namespace: uipath-runtime
+  labels:
+    app.kubernetes.io/name: uipath-queue-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: uipath-queue-metrics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: uipath-queue-metrics
+    spec:
+      serviceAccountName: uipath-queue-metrics
+      containers:
+      - name: metrics
+        image: uipath-queue-metrics:latest  # Custom image — see src/
+        ports:
+        - containerPort: 8080
+        env:
+        - name: UIPATH_ORCHESTRATOR_URL
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-url
+        - name: UIPATH_TENANT
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-tenant
+        - name: UIPATH_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: client-id
+        - name: UIPATH_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: client-secret
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uipath-queue-metrics
+  namespace: uipath-runtime
+spec:
+  selector:
+    app.kubernetes.io/name: uipath-queue-metrics
+  ports:
+  - port: 8080
+    targetPort: 8080

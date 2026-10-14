@@ -1,0 +1,68 @@
+# UiPath Robot Job - Ephemeral Execution
+#
+# Each Job runs ONE queue item, then the pod is auto-deleted
+# via ttlSecondsAfterFinished.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: uipath-robot-
+  namespace: uipath-runtime
+  labels:
+    app.kubernetes.io/name: uipath-robot
+    app.kubernetes.io/part-of: uipath-private-serverless
+spec:
+  # Auto-delete the Job (and its pod) 60 seconds after completion
+  ttlSecondsAfterFinished: 60
+  # Only attempt once — ephemeral, no retries at pod level
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: uipath-robot
+    spec:
+      serviceAccountName: uipath-robot
+      containers:
+      - name: robot
+        # Use the same UiPath Linux Robot image from the VM-based project
+        image: uipath/robot:latest  # Replace with your actual image
+        imagePullPolicy: Always
+        env:
+        - name: UIPATH_ORCHESTRATOR_URL
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-url
+        - name: UIPATH_TENANT
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-tenant
+        - name: UIPATH_MACHINE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: uipath-machine-keys
+              key: default-template
+        - name: UIPATH_QUEUE_NAME
+          value: "your-queue-name"  # Replace with your queue
+        # Run once mode: execute next queue item, then exit
+        - name: UIPATH_RUN_ONCE
+          value: "true"
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+      restartPolicy: Never
+      # Ensure fresh node — no caching of runtime state
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: uipath-robot
+              topologyKey: kubernetes.io/hostname

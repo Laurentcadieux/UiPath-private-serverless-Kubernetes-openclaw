@@ -1,0 +1,55 @@
+# Network Policy - Restrict Robot Pod Egress
+#
+# Robot pods can only reach UiPath Orchestrator.
+# Prevents any lateral movement or data exfiltration.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: uipath-robot-egress
+  namespace: uipath-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: uipath-robot
+  policyTypes:
+  - Egress
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow egress to UiPath Orchestrator (HTTPS)
+  # Replace with your Orchestrator's IP range or use FQDN with
+  # a CNP (Calico/Cilium) if your CNI supports it
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0  # Restrict this to Orchestrator IP range in production
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Service Account for Robot Pods (least privilege)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uipath-robot
+  namespace: uipath-runtime
+automountServiceAccountToken: false  # No K8s API access needed
+
+---
+# Service Account for Queue Metrics Service
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uipath-queue-metrics
+  namespace: uipath-runtime
+automountServiceAccountToken: false
