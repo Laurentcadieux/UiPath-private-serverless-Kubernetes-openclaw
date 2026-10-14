@@ -1,0 +1,46 @@
+# Standalone ephemeral robot Job (for manual trigger or CronJob use)
+# When KEDA is enabled, use the ScaledObject instead.
+{{- if not .Values.keda.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: uipath-robot-
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: uipath-robot
+    app.kubernetes.io/part-of: uipath-private-serverless
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  ttlSecondsAfterFinished: {{ .Values.robot.ttlSecondsAfterFinished }}
+  backoffLimit: {{ .Values.robot.backoffLimit }}
+  template:
+    spec:
+      serviceAccountName: uipath-robot
+      containers:
+      - name: robot
+        image: {{ .Values.robot.image | quote }}
+        imagePullPolicy: {{ .Values.robot.pullPolicy }}
+        env:
+        - name: UIPATH_ORCHESTRATOR_URL
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-url
+        - name: UIPATH_TENANT
+          valueFrom:
+            secretKeyRef:
+              name: uipath-config
+              key: orchestrator-tenant
+        - name: UIPATH_MACHINE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: uipath-machine-keys
+              key: {{ .Values.robot.defaultMachineTemplate | quote }}
+        - name: UIPATH_QUEUE_NAME
+          value: {{ .Values.robot.defaultQueueName | quote }}
+        - name: UIPATH_RUN_ONCE
+          value: {{ .Values.robot.runOnce | ternary "true" "false" | quote }}
+        resources:
+          {{- toYaml .Values.robot.resources | nindent 10 }}
+      restartPolicy: Never
+{{- end }}

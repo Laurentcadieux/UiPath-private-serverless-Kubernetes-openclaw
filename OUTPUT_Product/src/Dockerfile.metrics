@@ -1,0 +1,24 @@
+# Queue Metrics Service - KEDA External Scaler for UiPath Orchestrator
+#
+# Build:  docker build -t uipath-queue-metrics:latest -f Dockerfile.metrics .
+# Run:    docker run -e UIPATH_ORCHESTRATOR_URL=... -e UIPATH_TENANT=... \
+#           -e UIPATH_CLIENT_ID=... -e UIPATH_CLIENT_SECRET=... -p 8080:8080 \
+#           uipath-queue-metrics:latest
+
+FROM python:3.12-slim AS base
+
+WORKDIR /app
+
+# Install dependencies (none beyond stdlib for now, but add pip for future)
+COPY src/queue_metrics.py .
+
+# Non-root for security
+RUN groupadd -r uipath && useradd -r -g uipath uipath
+USER uipath
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+CMD ["python3", "queue_metrics.py"]

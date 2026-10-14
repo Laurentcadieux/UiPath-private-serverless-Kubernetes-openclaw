@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: uipath-runtime
+    app.kubernetes.io/part-of: uipath-private-serverless
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}

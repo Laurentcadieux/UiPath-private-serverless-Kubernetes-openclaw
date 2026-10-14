@@ -1,0 +1,69 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: uipath-queue-scaler
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: uipath-queue-scaler
+    app.kubernetes.io/part-of: uipath-private-serverless
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  scaleTargetRef:
+    apiVersion: batch/v1
+    kind: Job
+    name: uipath-robot-job
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  triggers:
+  - type: external
+    metadata:
+      scalerAddress: "uipath-queue-metrics.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.queueMetrics.port }}"
+      queueName: {{ .Values.keda.queueName | default .Values.robot.defaultQueueName | quote }}
+      target: "1"
+  jobTargetRef:
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      generateName: uipath-robot-
+      namespace: {{ .Values.namespace }}
+      labels:
+        app.kubernetes.io/name: uipath-robot
+        app.kubernetes.io/part-of: uipath-private-serverless
+        triggered-by: keda
+    spec:
+      ttlSecondsAfterFinished: {{ .Values.robot.ttlSecondsAfterFinished }}
+      backoffLimit: {{ .Values.robot.backoffLimit }}
+      template:
+        spec:
+          serviceAccountName: uipath-robot
+          containers:
+          - name: robot
+            image: {{ .Values.robot.image | quote }}
+            imagePullPolicy: {{ .Values.robot.pullPolicy }}
+            env:
+            - name: UIPATH_ORCHESTRATOR_URL
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-config
+                  key: orchestrator-url
+            - name: UIPATH_TENANT
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-config
+                  key: orchestrator-tenant
+            - name: UIPATH_MACHINE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: uipath-machine-keys
+                  key: {{ .Values.robot.defaultMachineTemplate | quote }}
+            - name: UIPATH_QUEUE_NAME
+              value: {{ .Values.keda.queueName | default .Values.robot.defaultQueueName | quote }}
+            - name: UIPATH_RUN_ONCE
+              value: {{ .Values.robot.runOnce | ternary "true" "false" | quote }}
+            resources:
+              {{- toYaml .Values.robot.resources | nindent 14 }}
+          restartPolicy: Never
+{{- end }}

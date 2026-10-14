@@ -1,0 +1,82 @@
+# UiPath Private Serverless Kubernetes - Helm Values
+#
+# All configurable parameters for the uipath-runtime Helm chart.
+
+# -- UiPath Orchestrator connection
+orchestrator:
+  url: "https://cloud.uipath.com"
+  tenant: "default"
+  # folderId: ""  # Optional: specific Orchestrator folder
+
+# -- OAuth credentials for queue metrics service
+#    (used by KEDA scaler to query queue depth)
+auth:
+  clientId: ""
+  clientSecret: ""
+
+# -- Machine templates (name → machine key)
+#    Each entry becomes a key in the uipath-machine-keys Secret
+machineTemplates:
+  default: ""
+  # highcpu: ""
+  # highmem: ""
+
+# -- Queue metrics service (KEDA external scaler)
+queueMetrics:
+  image: "uipath-queue-metrics:latest"
+  pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 8080
+  pollInterval: 5
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# -- Robot pod configuration (ephemeral Jobs)
+robot:
+  image: "uipath/robot:latest"
+  pullPolicy: Always
+  # -- Default machine template name (must match a key in machineTemplates)
+  defaultMachineTemplate: "default"
+  # -- Default queue name
+  defaultQueueName: ""
+  # -- Run once and exit (ephemeral mode)
+  runOnce: true
+  # -- Auto-delete Job after this many seconds post-completion
+  ttlSecondsAfterFinished: 60
+  # -- No retries — ephemeral, fail fast
+  backoffLimit: 0
+  resources:
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+
+# -- KEDA scaling configuration
+keda:
+  enabled: true
+  # -- Minimum concurrent robot pods (0 = scale to zero when idle)
+  minReplicaCount: 0
+  # -- Maximum concurrent robot pods
+  maxReplicaCount: 10
+  # -- How often KEDA polls the queue metrics service (seconds)
+  pollingInterval: 10
+  # -- Cooldown after scaling down (seconds)
+  cooldownPeriod: 60
+  # -- Queue name to monitor
+  queueName: ""
+
+# -- Network policy
+networkPolicy:
+  enabled: true
+  # -- Allowed egress CIDR for Orchestrator (restrict in production)
+  orchestratorCidr: "0.0.0.0/0"
+
+# -- Namespace
+namespace: "uipath-runtime"
