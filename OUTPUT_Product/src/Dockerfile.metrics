@@ -1,20 +1,34 @@
 # Queue Metrics Service - KEDA External Scaler for UiPath Orchestrator
 #
+# Uses the `uip` CLI (pre-authenticated) to query queue depth.
+# Mount the uip CLI binary and credentials from the host or a ConfigMap.
+#
 # Build:  docker build -t uipath-queue-metrics:latest -f Dockerfile.metrics .
-# Run:    docker run -e UIPATH_ORCHESTRATOR_URL=... -e UIPATH_TENANT=... \
-#           -e UIPATH_CLIENT_ID=... -e UIPATH_CLIENT_SECRET=... -p 8080:8080 \
+# Run:    docker run -v ~/.uipath:/home/uipath/.uipath \
+#           -e UIPATH_FOLDER_PATH="Shared/LinuxRPA" -p 8080:8080 \
 #           uipath-queue-metrics:latest
 
 FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# Install dependencies (none beyond stdlib for now, but add pip for future)
+# Install uip CLI
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -sfL https://download.uipath.com/CLI/uip-linux-amd64 -o /usr/local/bin/uip \
+    && chmod +x /usr/local/bin/uip \
+    && apt-get purge -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY src/queue_metrics.py .
 
 # Non-root for security
-RUN groupadd -r uipath && useradd -r -g uipath uipath
+RUN groupadd -r uipath && useradd -r -g uipath -m uipath \
+    && chown -R uipath:uipath /app
+
 USER uipath
+
+# uip credentials mounted at runtime
+ENV UIP_CLI=/usr/local/bin/uip
 
 EXPOSE 8080
 

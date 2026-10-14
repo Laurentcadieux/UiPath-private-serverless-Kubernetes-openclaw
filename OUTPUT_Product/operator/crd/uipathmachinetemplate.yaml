@@ -1,0 +1,82 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: uipathmachinetemplates.uipath.runtime
+spec:
+  group: uipath.runtime
+  names:
+    kind: UiPathMachineTemplate
+    listKind: UiPathMachineTemplateList
+    plural: uipathmachinetemplates
+    singular: uipathmachinetemplate
+    shortNames:
+    - uipmt
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            required:
+            - machineKeySecret
+            - robotImage
+            properties:
+              machineKeySecret:
+                type: object
+                required:
+                - name
+                - key
+                properties:
+                  name:
+                    type: string
+                    description: "Kubernetes Secret containing the machine key"
+                  key:
+                    type: string
+                    description: "Key within the Secret that holds the machine key value"
+              robotImage:
+                type: string
+                description: "Container image for the UiPath Robot runtime"
+                default: "uipath/robot:latest"
+              imagePullPolicy:
+                type: string
+                enum: ["Always", "IfNotPresent", "Never"]
+                default: "Always"
+              resources:
+                type: object
+                properties:
+                  limits:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  requests:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+              queueName:
+                type: string
+                description: "Default queue name for this machine template"
+              runOnce:
+                type: boolean
+                default: true
+                description: "Exit after single execution (ephemeral mode)"
+              ttlSecondsAfterFinished:
+                type: integer
+                default: 60
+                minimum: 0
+                description: "Auto-delete completed Jobs after N seconds"
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+    additionalPrinterColumns:
+    - name: Image
+      type: string
+      jsonPath: .spec.robotImage
+    - name: Queue
+      type: string
+      jsonPath: .spec.queueName
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp

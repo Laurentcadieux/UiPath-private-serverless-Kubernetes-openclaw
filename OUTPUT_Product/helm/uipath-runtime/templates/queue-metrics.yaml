@@ -25,30 +25,16 @@ spec:
         ports:
         - containerPort: {{ .Values.queueMetrics.port }}
         env:
-        - name: UIPATH_ORCHESTRATOR_URL
-          valueFrom:
-            secretKeyRef:
-              name: uipath-config
-              key: orchestrator-url
-        - name: UIPATH_TENANT
-          valueFrom:
-            secretKeyRef:
-              name: uipath-config
-              key: orchestrator-tenant
-        - name: UIPATH_CLIENT_ID
-          valueFrom:
-            secretKeyRef:
-              name: uipath-config
-              key: client-id
-        - name: UIPATH_CLIENT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: uipath-config
-              key: client-secret
+        - name: UIPATH_FOLDER_PATH
+          value: {{ .Values.folderPath | quote }}
+        - name: UIPATH_QUEUE_NAME
+          value: {{ .Values.keda.queueName | default .Values.robot.defaultQueueName | quote }}
         - name: PORT
           value: {{ .Values.queueMetrics.port | quote }}
         - name: POLL_INTERVAL
           value: {{ .Values.queueMetrics.pollInterval | quote }}
+        - name: UIP_CLI
+          value: "/usr/local/bin/uip"
         resources:
           {{- toYaml .Values.queueMetrics.resources | nindent 10 }}
         livenessProbe:
@@ -63,6 +49,26 @@ spec:
             port: {{ .Values.queueMetrics.port }}
           initialDelaySeconds: 3
           periodSeconds: 5
+        {{- if .Values.queueMetrics.uipCredentials.enabled }}
+        volumeMounts:
+        - name: uip-credentials
+          mountPath: /home/uipath/.uipath
+          readOnly: true
+        {{- end }}
+      {{- if .Values.queueMetrics.uipCredentials.enabled }}
+      volumes:
+      - name: uip-credentials
+        {{- if .Values.queueMetrics.uipCredentials.existingSecret }}
+        secret:
+          secretName: {{ .Values.queueMetrics.uipCredentials.existingSecret | quote }}
+        {{- else if .Values.queueMetrics.uipCredentials.hostPath }}
+        hostPath:
+          path: {{ .Values.queueMetrics.uipCredentials.hostPath | quote }}
+          type: DirectoryOrCreate
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+      {{- end }}
 
 ---
 apiVersion: v1

@@ -8,11 +8,8 @@ orchestrator:
   tenant: "default"
   # folderId: ""  # Optional: specific Orchestrator folder
 
-# -- OAuth credentials for queue metrics service
-#    (used by KEDA scaler to query queue depth)
-auth:
-  clientId: ""
-  clientSecret: ""
+# -- Folder path for queue operations (used by uip CLI)
+folderPath: "Shared"
 
 # -- Machine templates (name → machine key)
 #    Each entry becomes a key in the uipath-machine-keys Secret
@@ -28,6 +25,13 @@ queueMetrics:
   replicaCount: 1
   port: 8080
   pollInterval: 5
+  # -- uip CLI credentials volume (mounted from host or secret)
+  uipCredentials:
+    enabled: true
+    # Use existing secret with uip auth files
+    existingSecret: ""
+    # Or mount from host path
+    hostPath: ""
   resources:
     limits:
       cpu: 500m

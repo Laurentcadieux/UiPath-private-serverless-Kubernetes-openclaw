@@ -1,132 +1,140 @@
 """
 UiPath Queue Metrics Service - KEDA External Scaler
 
-Exposes UiPath Orchestrator queue depth as KEDA external scaler metrics.
-KEDA polls GET /scale to decide how many Jobs to create.
+Uses the `uip` CLI (pre-authenticated) to query UiPath Orchestrator
+queue depth. KEDA polls GET /scale to decide how many Jobs to create.
 
 Endpoints:
   GET /scale  - Returns queue depth metric for KEDA
   GET /health - Health check
 
 Required env vars:
-  UIPATH_ORCHESTRATOR_URL - Orchestrator base URL
-  UIPATH_TENANT           - Tenant name
-  UIPATH_CLIENT_ID        - OAuth client ID
-  UIPATH_CLIENT_SECRET    - OAuth client secret
+  UIPATH_FOLDER_PATH       - Orchestrator folder path (e.g. "Shared/LinuxRPA")
 
 Optional env vars:
-  PORT                    - HTTP port (default 8080)
-  POLL_INTERVAL           - Cache TTL in seconds (default 5)
+  UIPATH_QUEUE_NAME        - Default queue name
+  PORT                     - HTTP port (default 8080)
+  POLL_INTERVAL            - Cache TTL in seconds (default 5)
+  UIP_CLI                  - Path to uip CLI (default: "uip")
 """
 
 import os
 import time
 import json
 import logging
-import urllib.request
-import urllib.error
+import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("uipath-queue-metrics")
 
-ORCHESTRATOR_URL = os.environ["UIPATH_ORCHESTRATOR_URL"]
-TENANT = os.environ["UIPATH_TENANT"]
-CLIENT_ID = os.environ["UIPATH_CLIENT_ID"]
-CLIENT_SECRET = os.environ["UIPATH_CLIENT_SECRET"]
+FOLDER_PATH = os.environ.get("UIPATH_FOLDER_PATH", "Shared")
+DEFAULT_QUEUE = os.environ.get("UIPATH_QUEUE_NAME", "")
 PORT = int(os.environ.get("PORT", "8080"))
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "5"))
+UIP_CLI = os.environ.get("UIP_CLI", "uip")
 
-# Cache
-_cache = {"depth": 0, "fetched_at": 0}
-_token_cache = {"token": None, "expires_at": 0}
+# Cache: { queue_name: { "depth": int, "fetched_at": float } }
+_cache = {}
 
 
-def get_access_token():
-    """Get OAuth token from UiPath Orchestrator."""
-    if _token_cache["token"] and time.time() < _token_cache["expires_at"] - 30:
-        return _token_cache["token"]
-
-    token_url = f"{ORCHESTRATOR_URL}/identity/connect/token"
-    data = urllib.parse.urlencode({
-        "grant_type": "client_credentials",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-    }).encode()
-
-    req = urllib.request.Request(token_url, data=data, method="POST")
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
-
+def run_uip(*args) -> dict:
+    """Run a uip CLI command and return parsed JSON output."""
+    cmd = [UIP_CLI] + list(args) + ["--output", "json"]
+    log.debug("Running: %s", " ".join(cmd))
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = json.loads(resp.read())
-            _token_cache["token"] = body["access_token"]
-            _token_cache["expires_at"] = time.time() + body.get("expires_in", 3600)
-            return _token_cache["token"]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            log.error("uip CLI error (rc=%d): %s", result.returncode, result.stderr.strip())
+            return {"Result": "Failure"}
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        log.error("uip CLI timed out")
+        return {"Result": "Failure"}
+    except json.JSONDecodeError as e:
+        log.error("Failed to parse uip output: %s", e)
+        return {"Result": "Failure"}
     except Exception as e:
-        log.error("Failed to get token: %s", e)
-        return None
+        log.error("uip CLI error: %s", e)
+        return {"Result": "Failure"}
 
 
 def get_queue_depth(queue_name: str) -> int:
-    """Query Orchestrator for queue item count (New state)."""
-    token = get_access_token()
-    if not token:
-        return 0
+    """Query queue item count in New state using uip CLI."""
+    now = time.time()
 
-    # OData query for queue items in New state (URL-encode the filter)
-    import urllib.parse as urlparse
-    filter_expr = f"QueueDefinition/Name eq '{queue_name}' and Status eq 'New'"
-    params = urlparse.urlencode({"$filter": filter_expr, "$count": "true", "$top": "0"})
-    url = f"{ORCHESTRATOR_URL}/{TENANT}/odata/QueueItems?{params}"
+    # Check cache
+    cached = _cache.get(queue_name)
+    if cached and now - cached["fetched_at"] < POLL_INTERVAL:
+        return cached["depth"]
 
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/json")
+    # Query via uip CLI — get all items to count accurately
+    resp = run_uip(
+        "or", "queue-items", "list",
+        "--folder-path", FOLDER_PATH,
+        "--queue-name", queue_name,
+        "--status", "New",
+        "--limit", "100",
+    )
 
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = json.loads(resp.read())
-            return body.get("@odata.count", 0)
-    except Exception as e:
-        log.error("Failed to query queue '%s': %s", queue_name, e)
-        return 0
+    if resp.get("Result") != "Success":
+        # Return cached value on error, or 0
+        depth = cached["depth"] if cached else 0
+        log.warning("Using cached depth=%d for queue '%s'", depth, queue_name)
+        return depth
+
+    # Count from pagination (TotalCount if available, else data length)
+    pagination = resp.get("Pagination", {})
+    total = pagination.get("TotalCount", None)
+    if total is not None:
+        depth = int(total)
+    else:
+        depth = len(resp.get("Data", []))
+
+    # Update cache
+    _cache[queue_name] = {"depth": depth, "fetched_at": now}
+    return depth
+
+
+def list_queues() -> list:
+    """List all queues in the folder."""
+    resp = run_uip("or", "queues", "list", "--folder-path", FOLDER_PATH)
+    if resp.get("Result") != "Success":
+        return []
+    return [q.get("Name", "") for q in resp.get("Data", [])]
 
 
 class ScalerHandler(BaseHTTPRequestHandler):
     """KEDA external scaler HTTP handler."""
 
     def do_GET(self):
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if parsed.path == "/health":
             self._respond(200, {"status": "healthy"})
-        elif self.path.startswith("/scale"):
-            # Parse queue name from query string
-            queue_name = self._get_param("queueName", "default")
-            now = time.time()
 
-            # Use cached value if fresh
-            if now - _cache["fetched_at"] < POLL_INTERVAL:
-                depth = _cache["depth"]
-            else:
-                try:
-                    depth = get_queue_depth(queue_name)
-                    _cache["depth"] = depth
-                    _cache["fetched_at"] = now
-                except Exception as e:
-                    depth = _cache["depth"]
-                    log.warning("Using cached depth=%d due to error: %s", depth, e)
+        elif parsed.path == "/scale":
+            queue_name = params.get("queueName", [DEFAULT_QUEUE])[0]
+            if not queue_name:
+                self._respond(400, {"error": "queueName parameter required"})
+                return
 
+            depth = get_queue_depth(queue_name)
             self._respond(200, {
                 "metricValues": [{"metricName": "queueDepth", "metricValue": depth}],
                 "queueDepth": depth,
             })
+
+        elif parsed.path == "/queues":
+            queues = list_queues()
+            self._respond(200, {"queues": queues})
+
         else:
             self._respond(404, {"error": "not found"})
-
-    def _get_param(self, name: str, default: str = "") -> str:
-        from urllib.parse import urlparse, parse_qs
-        params = parse_qs(urlparse(self.path).query)
-        return params.get(name, [default])[0]
 
     def _respond(self, code: int, body: dict):
         self.send_response(code)
@@ -139,8 +147,16 @@ class ScalerHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Warm up: verify uip CLI is working
+    resp = run_uip("user")
+    if resp.get("Result") == "Success":
+        user = resp.get("Data", {})
+        log.info("Authenticated as %s (%s)", user.get("Name"), user.get("IdentityType"))
+    else:
+        log.warning("uip CLI not authenticated — queue queries will fail")
+
     server = HTTPServer(("0.0.0.0", PORT), ScalerHandler)
-    log.info("Queue metrics service listening on :%d", PORT)
+    log.info("Queue metrics service listening on :%d (folder: %s)", PORT, FOLDER_PATH)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
