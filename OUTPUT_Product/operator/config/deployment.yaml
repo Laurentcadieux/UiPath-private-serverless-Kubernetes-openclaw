@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uipath-ephemeral-operator
+  namespace: uipath-runtime
+  labels:
+    app.kubernetes.io/name: uipath-ephemeral-operator
+    app.kubernetes.io/part-of: uipath-private-serverless
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: uipath-ephemeral-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: uipath-ephemeral-operator
+    spec:
+      serviceAccountName: uipath-operator
+      containers:
+      - name: operator
+        image: uipath-ephemeral-operator:latest
+        env:
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: UIPATH_FOLDER_PATH
+          value: "Shared"
+        - name: POLL_INTERVAL_SECONDS
+          value: "10"
+        - name: DEFAULT_TTL_SECONDS
+          value: "60"
+        volumeMounts:
+        - name: uip-credentials
+          mountPath: /home/uipath/.uipath
+          readOnly: true
+      volumes:
+      - name: uip-credentials
+        emptyDir: {}  # Replace with hostPath or secret for real auth
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: uipath-operator
+  namespace: uipath-runtime
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: uipath-operator
+  namespace: uipath-runtime
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+- apiGroups: ["uipath.runtime"]
+  resources: ["uipathmachinetemplates"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["uipath.runtime"]
+  resources: ["uipathmachinetemplates/status"]
+  verbs: ["get", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: uipath-operator
+  namespace: uipath-runtime
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: uipath-operator
+subjects:
+- kind: ServiceAccount
+  name: uipath-operator
+  namespace: uipath-runtime

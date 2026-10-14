@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Manifests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install kubeconform
+      run: |
+        curl -sfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
+
+    - name: Validate K8s manifests
+      run: |
+        kubeconform -kubernetes-version 1.31.0 -skip ScaledObject -summary -verbose \
+          OUTPUT_Product/config/secrets.example.yaml \
+          OUTPUT_Product/config/networkpolicy.example.yaml \
+          OUTPUT_Product/config/queue-metrics.example.yaml \
+          OUTPUT_Product/config/robot-job.example.yaml
+
+    - name: Validate CRDs
+      run: |
+        kubeconform -kubernetes-version 1.31.0 -summary \
+          OUTPUT_Product/operator/crd/uipathmachinetemplate.yaml
+
+  helm:
+    name: Helm Chart
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@v4
+
+    - name: Helm template render
+      run: |
+        helm template uipath-runtime OUTPUT_Product/helm/uipath-runtime \
+          --set machineTemplates.default="test-key" \
+          --set keda.queueName="test-queue" \
+          --set queueMetrics.uipCredentials.hostPath="/home/user/.uipath"
+
+    - name: Helm lint
+      run: |
+        helm lint OUTPUT_Product/helm/uipath-runtime
+
+  test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Test queue metrics module
+      run: |
+        cd OUTPUT_Product
+        python3 -c "import importlib.util; spec = importlib.util.spec_from_file_location('queue_metrics', 'src/queue_metrics.py'); mod = importlib.util.module_from_spec(spec); print('Module loads OK')"
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [validate, helm, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build metrics image
+      run: docker build -t uipath-queue-metrics:latest -f OUTPUT_Product/src/Dockerfile.metrics .
+
+    - name: Build operator image
+      run: docker build -t uipath-ephemeral-operator:latest -f OUTPUT_Product/operator/Dockerfile .
