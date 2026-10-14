@@ -65,19 +65,20 @@ def get_access_token():
             return _token_cache["token"]
     except Exception as e:
         log.error("Failed to get token: %s", e)
-        raise
+        return None
 
 
 def get_queue_depth(queue_name: str) -> int:
     """Query Orchestrator for queue item count (New state)."""
     token = get_access_token()
+    if not token:
+        return 0
 
-    # OData query for queue items in New state
-    url = (
-        f"{ORCHESTRATOR_URL}/{TENANT}/odata/QueueItems"
-        f"?$filter=QueueDefinition/Name eq '{queue_name}' and Status eq 'New'"
-        f"&$count=true&$top=0"
-    )
+    # OData query for queue items in New state (URL-encode the filter)
+    import urllib.parse as urlparse
+    filter_expr = f"QueueDefinition/Name eq '{queue_name}' and Status eq 'New'"
+    params = urlparse.urlencode({"$filter": filter_expr, "$count": "true", "$top": "0"})
+    url = f"{ORCHESTRATOR_URL}/{TENANT}/odata/QueueItems?{params}"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
@@ -107,9 +108,13 @@ class ScalerHandler(BaseHTTPRequestHandler):
             if now - _cache["fetched_at"] < POLL_INTERVAL:
                 depth = _cache["depth"]
             else:
-                depth = get_queue_depth(queue_name)
-                _cache["depth"] = depth
-                _cache["fetched_at"] = now
+                try:
+                    depth = get_queue_depth(queue_name)
+                    _cache["depth"] = depth
+                    _cache["fetched_at"] = now
+                except Exception as e:
+                    depth = _cache["depth"]
+                    log.warning("Using cached depth=%d due to error: %s", depth, e)
 
             self._respond(200, {
                 "metricValues": [{"metricName": "queueDepth", "metricValue": depth}],
